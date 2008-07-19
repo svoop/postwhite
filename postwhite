@@ -1,0 +1,544 @@
+#!/usr/bin/env ruby
+
+##
+# = Postwhite Policy Server
+#
+# == Introduction
+# Postwhite is a policy server for Postfix MTA which filters incoming emails
+# based on per recipient whitelists managed by an email frontend.
+#
+# == Installation
+# The following instructions assume that you are using the default settings.
+#
+# 1. Install the necessary Ruby gems: <tt>gem install trollop</tt>
+# 2. Create the configuration directory: <tt>postwhite configure</tt>
+# 3. List all email addresses that should be protected by Postwhite in
+#    <tt>/etc/postfix/postwhite/recipients.yml</tt>.
+# 4. Start the Postwhite daemon: <tt>postwhite -d -q start</tt>
+# 5. Add the line <tt>check_policy_service inet:127.0.0.1:10035,</tt> to the
+#    <tt>smtpd_recipient_restrictions</tt> block which you find somewhere in
+#    <tt>/etc/postfix/main.cf</tt>. You should place it near the end of the
+#    block after all basic services (like <tt>reject_unauth_destination,</tt>)
+#    and the greylist service (like Postgrey) but before the anti SPAM services
+#    (like DSPAM or SpamAssassin) in order to prevent unnecessary workload.
+# 6. Do a <tt>postfix reload</tt> and start using Postwhite.
+#
+# == Usage
+# Incoming mail to is rejected unless the sender address or sender domain is 
+# present on the recipient's whitelist. This concept is neither new nor fancy
+# in itself, but the way Postwhite lets you manage the whitelist sure is.
+# 
+# Here is a real life example:
+#
+# Arthur's main email address <em>arthur@dent.tld</em> is great for everyday
+# use, but he doesn't want to pollute it by using it for mailing lists,
+# online shopping and such. Postwhite to the rescue. He therefore creates
+# a virtual email address <em>hitchhike@dent.tld</em> which is delivered to
+# the same mailbox. He adds this address to +config.yml+ and then restarts
+# Postwhite.
+#
+# Initially all incoming emails will be rejected, so when Arthur decides to 
+# join the Betelgeuse mailing list, the whitelist has to learn about this. 
+# Arthur sends an empty email to <em>hitchhike+learn@dent.tld</em> which
+# puts Postwhite into learning mode for a limited period of time. In learning
+# mode, Postwhite allows and delivers <em>any</em> incoming mails, yet it
+# delivers a followup notification message along with it. Thus when the first 
+# mail from the Betelgeuse mailing list comes in, Arthur simple replies to 
+# the corresponding notification mail thus adding Betelgeuse to the whitelist.
+#
+# As you see, Arthur sends commands to Postwhite by adding <em>+command</em>
+# right before the <em>@</em> of his email address. A good starting point
+# is to send an <em>info</em> command to which Postwhite replies with a list
+# of available commands and a dump of the current whitelist. In Arthur's
+# case he would have to send a mail to <em>hitchhike+info@dent.tld</em>.
+#
+# == Donations
+# Please show your support for free software by making a donation which
+# will help keeping this project alive. This applies in particular to mail
+# service providers: Don't use it if you're too cheap to donate.
+#
+# http://www.bitcetera.com/en/products/postwhite
+#
+# == Feedback and Contributions
+# Feel free to send your success or failure stories, suggestions as well
+# as contributions using the mailform on: 
+#
+# http://www.bitcetera.com
+#
+# == Disclaimer and License
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You find a copy of the full GPLv3 license on:
+#
+# http://www.gnu.org/licenses/gpl-3.0.txt
+#
+# :title: Postwhite Policy Server
+
+require 'trollop'
+require 'yaml'
+require 'erb'
+require 'gserver'
+require 'net/smtp'
+require 'fileutils'
+require 'facets/file/read'
+require 'facets/file/write'
+require 'facets/file/rewrite'
+require 'facets/hash/rekey'
+
+##
+# Postwhite controller.
+
+class Postwhite
+
+  ##
+  # Postwhite version.
+
+  VERSION = 'postwhite 0.0.1, (c) 2008 Sven Schwyn, www.bitcetera.com'
+
+  ##
+  # Available commands.
+
+  COMMANDS = [:start, :stop, :status, :configure]
+
+  ##
+  # Default settings used as fallback and by 'configure'.
+
+  CONFIG = {
+    :'host' => 'localhost',
+    :'port' => 10035,
+    :'max-connections' => 4,
+    :'learning-period' => 30,
+    :'require-sasl' => true,
+    :'reject-message' => 'User unknown in local recipient table',
+    :'smtp-host' => 'localhost',
+    :'smtp-port' => 25,
+    :'sender' => 'Postwhite Service <postwhite@domain.tld>',
+    :'pid-file' => '/var/run/postwhite.pid',
+    :'log-file' => '/var/log/postwhite.log',
+    :'spool-dir' => '/var/spool/postfix/postwhite'
+  }
+
+  ##
+  # Mail messages sent by Postwhite used as fallback and by 'configure'.
+
+  MESSAGES = {
+    :footer => <<-EOS,
+This is an automated message from the Postwhite service.
+
+Check this web page for an introduction:
+http://www.bitcetera.com/en/products/postwhite
+    EOS
+    :info => <<-EOS,
+Subject: Info
+
+Postwhite recognizes the following email commands:
+<%= @request[:username] %>+info@<%= @request[:domain] %> --- request an informational mail like this one.
+<%= @request[:username] %>+learn@<%= @request[:domain] %> --- temporary (<%= $config[:'learning-period'] %> min) allow all incoming mails for learning
+<%= @request[:username] %>+allow-user-at-domain.tld@<%= @request[:domain] %> --- allow future mails from user@domain.tld
+<%= @request[:username] %>+allow-domain.tld@<%= @request[:domain] %> --- allow future mails from all users of domain.tld
+<%= @request[:username] %>+block-user-at-domain.tld@<%= @request[:domain] %> --- block future mails from user@domain.tld
+<%= @request[:username] %>+allow-domain.tld@<%= @request[:domain] %> --- block future mails from all users of domain.tld
+
+Your whitelist is currently <%= @request.learning? ? 'in LEARNING MODE' : 'NOT in learning mode' %> and contains the following entries:
+<%= locals[:whitelist].empty? ? :none : locals[:whitelist].join("\n") %>
+    EOS
+    :allow => <<-EOS,
+Subject: Allow from <%= @request[:sender] %>?
+
+The accompanying email with the following characteristics IS NOT YET on your whitelist:
+* Sender:  <%= @request[:sender] %>
+* Client:  <%= @request[:client_address] %> <%= @request[:client_name] %>
+* Request: <%= @request[:instance] %>
+
+Please choose what you wish to do with future emails from this sender:
+* Reply to this email if you wish to ALLOW mails from this exact sender.
+* Send an email to <%= @request[:recipient].sub(/@/, '+allow-'+@request[:domain]+'@') %> to ALLOW all mails from this domain.
+* Trash this email otherwise.
+    EOS
+    :block => <<-EOS
+Subject: Block from <%= @request[:domain] %>?
+
+The accompanying email with the following characteristics IS ALREADY on your whitelist:
+* Sender:  <%= @request[:sender] %>
+* Client:  <%= @request[:client_address] %> <%= @request[:client_name] %>
+* Request: <%= @request[:instance] %>
+
+Please choose what you wish to do with future emails from this sender:
+* Reply to this email if you wish to BLOCK all mails from this domain.
+* Trash this email otherwise.
+    EOS
+  }
+
+  ##
+  # Sample recipients used by 'configure'.
+
+  RECIPIENTS = {
+    'example.without.sasl@domain.tld' => nil,
+    'example.with.sasl@domain.tld' => 'example-sasl-user'
+  }
+
+  ##
+  # Find a running postwhite daemon or do some cleanup if none is found.
+
+  def initialize
+    $config = CONFIG.merge(YAML.load_file("#{options[:'config-dir']}/config.yml").rekey) rescue CONFIG.clone
+    $config.merge!(parse_options)
+    $config[:messages] = MESSAGES.merge(YAML.load_file("#{$config[:'config-dir']}/messages.yml").rekey) rescue MESSAGES.clone
+    $config[:recipients] = YAML.load_file("#{$config[:'config-dir']}/recipients.yml") rescue {}
+    $log = File.open($config[:'log-file'], 'a')
+    File.open($config[:'pid-file']) {|file| @pid = file.gets.to_i } rescue @pid = nil
+    Process.kill(0, @pid) rescue cleanup
+  end
+  
+  ##
+  # Cleanup resources.
+
+  def self.finalize
+    $log.close
+  end
+  
+  ##
+  # Dispatch to the selected command.
+  
+  def dispatch
+    COMMANDS.include?($config[:command].to_sym) ? self.send($config[:command]) : 1    
+  end
+
+  ##
+  # Creates all the necessary files in <tt>/etc</tt> and <tt>/var</tt>.
+
+  def configure
+    FileUtils.mkdir_p($config[:'config-dir']) if !File.directory?($config[:'config-dir'])
+    FileUtils.mkdir_p($config[:'spool-dir']) if !File.directory?($config[:'spool-dir'])
+    File.open("#{$config[:'config-dir']}/config.yml", 'w') {|file| file.puts CONFIG.rekey(&:to_s).to_yaml } if !File.exists?("#{$config[:'config-dir']}/config.yml")
+    File.open("#{$config[:'config-dir']}/recipients.yml", 'w') {|file| file.puts RECIPIENTS.to_yaml } if !File.exists?("#{$config[:'config-dir']}/recipients.yml")
+    File.open("#{$config[:'config-dir']}/messages.yml", 'w') {|file| file.puts MESSAGES.rekey(&:to_s).to_yaml } if !File.exists?("#{$config[:'config-dir']}/messages.yml")
+    0
+  end
+
+  ##
+  # Start the postwhite daemon.
+
+  def start
+    if !started?
+      configure
+      process = fork do
+        server = PostwhiteServer.new
+        server.start
+        @pid = Process.pid
+        File.open($config[:'pid-file'], 'w') {|file| file.puts @pid }
+        puts "The postwhite daemon has been started on port #{$config[:port]} with PID #{@pid}." if !$config[:quiet]
+        STDERR.reopen('/dev/null')   # silence STDERR
+        sleep   # until INT signal
+      end
+      Signal.trap('INT') { cleanup }
+      if $config[:detach]
+        Process.detach(process)
+      else
+        Process.wait
+      end
+      0
+    else
+      puts "The postwhite daemon is already running." if !$config[:quiet]
+      1
+    end
+  end
+
+  ##
+  # Stop the postwhite daemon.
+
+  def stop
+    if started?
+      Process.kill('INT', @pid)
+      cleanup
+      puts "The postwhite daemon has been stopped." if !$config[:quiet]      
+      0
+    else
+      puts "The postwhite daemon is not running." if !$config[:quiet]
+      1
+    end
+  end
+
+  ##
+  # Inquire the status of the postwhite daemon.
+
+  def status
+    if started?
+      puts 'started' if !$config[:quiet]
+      0
+    else
+      puts 'stopped' if !$config[:quiet]
+      1
+    end
+  end
+  
+private
+
+  ##
+  # Read the options from the command line.
+
+  def parse_options
+    options = Trollop::options do
+      version VERSION
+      banner <<-EOS
+Postwhite is a policy server for Postfix MTA which filters incoming emails
+based on per recipient whitelists managed by an email frontend.
+
+Usage:
+        postwhite [options] {#{Postwhite::COMMANDS.join('|')}}
+
+Options:
+      EOS
+      opt :'config-dir', "Directory containing the configuration files", :default => '/etc/postfix/postwhite'
+      opt :'detach', "Detach the daemon", :default => false
+      opt :'quiet', "Don't output anything", :default => false
+      opt :'audit', "Write audit information to log", :default => false
+      opt :'debug', "Write debug information to log", :default => false
+      stop_on Postwhite::COMMANDS
+    end
+    options[:command] = ARGV[0]
+    options
+  end
+
+  ##
+  # Returns true if a postwhite daemon is running.
+
+  def started?
+    !@pid.nil? && @pid > 0
+  end
+
+  ##
+  # Reset the PID and remove the PID file.
+
+  def cleanup
+    @pid = nil
+    File.delete($config[:'pid-file']) rescue true
+  end
+
+  ##
+  # Postwhite server.
+
+  class PostwhiteServer < GServer
+
+    ##
+    # Available commands.
+
+    COMMANDS = [:info, :learn, :allow, :block]
+  
+    ##
+    # Initialize the server.
+
+    def initialize
+      super($config[:port], $config[:host], $config[:'max-connections'], $log, $config[:audit], $config[:debug])
+    end
+
+    private
+
+    ##
+    # Serving method called when a client connects.
+
+    def serve(io)
+      @request = Request.new(io)
+      log("Request #{@request[:instance]}: #{@request.inspect}") if $config[:debug]
+      if @request.protected?
+        if @request.command?
+          if @request.authorized?
+            self.send(@request[:command])
+            respond(io, :DISCARD, :'executing command')
+          else   # not authorized
+            respond(io, :REJECT, :'authorization failed')
+          end
+        else   # not command
+          if @request.learning?
+            if @request.whitelisted?
+              sendmail($config[:messages][:block], $config[:sender], @request[:recipient], @request[:recipient].sub(/@/, "+block-#{@request[:domain]}@"))
+            else   # not whitelisted
+              sendmail($config[:messages][:allow], $config[:sender], @request[:recipient], @request[:recipient].sub(/@/, "+allow-#{@request[:username]}-at-#{@request[:domain]}@"))
+            end
+            respond(io, :OK, :'learning mode')              
+          else   # not learning
+            if @request.whitelisted?
+              respond(io, :OK, :'found on whitelist')
+            else   # not whitelisted
+              respond(io, :REJECT, $config[:'reject-message'])              
+            end  
+          end
+        end
+      else   # not protected
+        respond(io, :OK)
+      end
+    rescue Exception => e
+      respond(io, :OK, :'daemon error')
+      log(e.message + "\n" + e.backtrace.join("\n"))
+    end
+    
+    ##
+    # Send an informational message.
+
+    def info
+      whitelist = File.read_list("#{$config[:'config-dir']}/#{@request[:sender]}") rescue []
+      whitelist.map! {|e| "#{e} --- delete: #{@request[:username]}+block-#{e.sub(/@/, '-at-')}@#{@request[:domain]}" }
+      sendmail($config[:messages][:info], $config[:sender], @request[:sender], nil, :whitelist => whitelist )
+    end
+    
+    ##
+    # Temporary allow any incoming mails for learning.
+
+    def learn
+      FileUtils.touch("#{$config[:'spool-dir']}/#{@request[:sender]}")
+    end
+    
+    ##
+    # Allow future mails from a user or domain.
+
+    def allow
+      @request.add_to_whitelist
+      File.delete("#{$config[:'spool-dir']}/#{@request[:sender]}") rescue true
+    end
+
+    ##
+    # Block future mails from a user or domain.
+
+    def block
+      @request.remove_from_whitelist
+      File.delete("#{$config[:'spool-dir']}/#{@request[:sender]}") rescue true
+    end
+
+    ##
+    # Send a mail message through SMTP.
+
+    def sendmail(message, from, to, replyto=nil, locals=nil)
+      message = ERB.new(<<-EOS).result(binding)
+From: <%= $config[:sender] %>
+To: <%= to %>
+Reply-To: <%= replyto.nil? ? from : replyto %>
+#{message}
+#{$config[:messages][:footer]}
+      EOS
+      Net::SMTP.start($config[:'smtp-host'], $config[:'smtp-port']) do |smtp|
+        smtp.send_message message, from, to
+      end
+    end
+
+    ##
+    # Sends a response through the IO channel.
+
+    def respond(io, action=:OK, message=nil)
+      io.print(:'action=', action)
+      io.print(:' ', message) if !message.nil?
+      2.times { io.puts }
+      log("Response #{@request[:instance]}: #{action} #{message}") if $config[:debug]
+    end
+
+  end
+
+  ##
+  # Postwhite request.
+
+  class Request
+
+    ##
+    # Parse the request.
+
+    def initialize(io)
+      @data = { :argument => nil, :client_address => nil, :client_name => nil, :command => nil, :instance => nil, :recipient => nil, :sasl_username => nil, :sender => nil }
+      while attribute = io.gets.chomp.split('=', 2)
+        break if attribute.empty?
+        @data[attribute[0].to_sym] = attribute[1].downcase if @data.keys.include?(attribute[0].to_sym)
+      end
+      if @data[:sender] =~ /^(.*?)@(.*)$/
+        @data[:username] = $1
+        @data[:domain] = $2        
+      end
+      if @data[:recipient] =~ /^(.+)\+(#{PostwhiteServer::COMMANDS.join('|')})-?(.+)?(@.+)$/
+        @data[:recipient] = $1 + $4
+        @data[:command] = $2
+        @data[:argument] = $3
+      end
+      @data[:argument].sub!(/-at-/, '@') if !@data[:argument].nil?
+    end
+
+    ##
+    # Read value from the request data hash.
+
+    def [](key)
+      @data[key]
+    end
+
+    ##
+    # Is the email eligible for Postwhite protection?
+
+    def protected?
+      @data[:client_address] !~ /^(127\.0\.0\.1|::1)$/ &&   # exclude local emails
+      $config[:recipients].keys.include?(@data[:recipient])
+    end
+
+    ##
+    # Is the request is a command message (or an ordinary incoming message)?
+    
+    def command?
+      !@data[:command].nil?
+    end
+
+    ##
+    # Is the request a command message from an authorized sender?
+ 
+    def authorized?
+      command? &&
+      $config[:recipients].keys.include?(@data[:sender]) &&   # valid sender?
+      @data[:sender] == @data[:recipient] &&   # own email address?
+      (!$config[:'require-sasl'] || $config[:recipients][@data[:sender]] == @data[:'sasl_username'])   # valid sasl username?
+    end
+
+    ##
+    # Is the recipient of the incoming message in learning mode?
+    
+    def learning?
+      File.exists?("#{$config[:'spool-dir']}/#{@data[:recipient]}") &&
+      Time.now - File.mtime("#{$config[:'spool-dir']}/#{@data[:recipient]}") < $config[:'learning-period'] * 60 
+    end
+
+    ##
+    # Is the sender of the incoming message (or the passed regexp) on the whitelist?
+
+    def whitelisted?(regexp=/^(#{@data[:sender]}|#{@data[:domain]})$/)
+      FileUtils.touch("#{$config[:'config-dir']}/#{@data[:recipient]}")   # assure whitelist existance
+      !File.open("#{$config[:'config-dir']}/#{@data[:recipient]}") {|f| f.grep(regexp) }.empty?
+    end
+
+    ##
+    # Add an entry (sender or sender domain) to the whitelist.
+
+    def add_to_whitelist
+      if !whitelisted?(/#{@data[:argument]}/)
+        File.append("#{$config[:'config-dir']}/#{@data[:recipient]}", "#{@data[:argument]}\n")
+      end
+    end
+
+    ##
+    # Delete an entry (sender or sender domain) from the whitelist.
+
+    def remove_from_whitelist
+      if whitelisted?(/#{@data[:argument]}/)
+        File.rewrite("#{$config[:'config-dir']}/#{@data[:recipient]}") do |s|
+          s.gsub!(/^#{Regexp.escape(@data[:argument])}\s*/, '')
+        end
+      end
+    end
+
+  end
+
+end
+
+##
+# Main execution block.
+
+exit Postwhite.new.dispatch
