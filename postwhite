@@ -216,6 +216,8 @@ Please choose what you wish to do with future emails from this sender:
       1
     else
       if $config[:command] != 'configure'
+        FileUtils.touch($config[:'log-file'])
+        FileUtils.chmod(0640, $config[:'log-file'])
         $log = File.open($config[:'log-file'], 'a')
         File.open($config[:'pid-file']) {|file| @pid = file.gets.to_i } rescue @pid = nil
         Process.kill(0, @pid) rescue cleanup
@@ -240,20 +242,19 @@ Please choose what you wish to do with future emails from this sender:
   def start
     if !started?
       configure
-      Process.euid = Etc::getpwnam($config[:user]).uid
-      Process.gid = Etc::getpwnam($config[:user]).gid
-      process = fork do
+      @pid = fork do
+        Process.euid = Etc::getpwnam($config[:user]).uid
+        Process.gid = Etc::getpwnam($config[:user]).gid
         server = PostwhiteServer.new
         server.start
-        @pid = Process.pid
-        File.open($config[:'pid-file'], 'w') {|file| file.puts @pid }
-        puts "The postwhite daemon has been started on port #{$config[:port]} with PID #{@pid}." if !$config[:quiet]
         STDERR.reopen('/dev/null')   # silence STDERR
         sleep   # until INT signal
-      end
+      end || (raise "cannot not fork server process")
+      File.open($config[:'pid-file'], 'w') {|file| file.puts @pid }
+      puts "The postwhite daemon has been started on port #{$config[:port]} with PID #{@pid}." if !$config[:quiet]
       Signal.trap('INT') { cleanup }
       if $config[:detach]
-        Process.detach(process)
+        Process.detach(@pid)
       else
         Process.wait
       end
@@ -340,7 +341,7 @@ Options:
   # Create a directory if it doesn't exist already.
 
   def mkdir?(dir)
-    FileUtils.mkdir_p(dir, :mode => 0770) if !File.directory?(dir)
+    FileUtils.mkdir_p(dir, :mode => 0750) if !File.directory?(dir)
   end
 
   ##
@@ -351,7 +352,7 @@ Options:
       File.open("#{$config[:'config-dir']}/#{yml.downcase}.yml", 'w') do |file|
         file.puts eval(yml).rekey(&:to_s).to_yaml
       end
-      File.chmod(0660, "#{$config[:'config-dir']}/#{yml.downcase}.yml")
+      File.chmod(0640, "#{$config[:'config-dir']}/#{yml.downcase}.yml")
     end
   end
 
@@ -543,8 +544,8 @@ Reply-To: <%= replyto.nil? ? from : replyto %>
 
     def whitelisted?(regexp=/^(#{@data[:sender]}|#{@data[:domain]})$/)
       whitelist = "#{$config[:'config-dir']}/#{@data[:recipient]}"
-      FileUtils.touch(whitelist)   # assure whitelist existance
-      FileUtils.chmod(0660, whitelist)   # assure whitelist permissions
+      FileUtils.touch(whitelist)
+      FileUtils.chmod(0640, whitelist)
       !File.open(whitelist) {|f| f.grep(regexp) }.empty?
     end
 
