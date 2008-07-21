@@ -10,7 +10,7 @@
 # == Installation
 # The following instructions assume that you are using the default settings.
 #
-# 1. Install the necessary Ruby gems: <tt>gem install trollop</tt>
+# 1. Install the necessary Ruby gems: <tt>gem install facets trollop</tt>
 # 2. Create the configuration directory: <tt>postwhite configure</tt>
 # 3. List all email addresses that should be protected by Postwhite in
 #    <tt>/etc/postfix/postwhite/recipients.yml</tt>.
@@ -19,23 +19,23 @@
 #    <tt>smtpd_recipient_restrictions</tt> block which you find somewhere in
 #    <tt>/etc/postfix/main.cf</tt>. You should place it near the end of the
 #    block after all basic services (like <tt>reject_unauth_destination,</tt>)
-#    and the greylist service (like Postgrey) but before the anti SPAM services
+#    and the greylist service (like Postgrey) but before the anti-SPAM services
 #    (like DSPAM or SpamAssassin) in order to prevent unnecessary workload.
 # 6. Do a <tt>postfix reload</tt> and start using Postwhite.
 #
 # == Usage
-# Incoming mail to is rejected unless the sender address or sender domain is 
+# Incoming mail is rejected unless the sender address or sender domain is 
 # present on the recipient's whitelist. This concept is neither new nor fancy
-# in itself, but the way Postwhite lets you manage the whitelist sure is.
+# in itself, but the way Postwhite lets you manage your whitelist sure is.
 # 
 # Here is a real life example:
 #
 # Arthur's main email address <em>arthur@dent.tld</em> is great for everyday
 # use, but he doesn't want to pollute it by using it for mailing lists,
-# online shopping and such. Postwhite to the rescue. He therefore creates
-# a virtual email address <em>hitchhike@dent.tld</em> which is delivered to
-# the same mailbox. He adds this address to +config.yml+ and then restarts
-# Postwhite.
+# websites, online shopping and such. Postwhite to the rescue. He therefore 
+# creates a virtual email address <em>hitchhike@dent.tld</em> which is 
+# delivered to the same mailbox. He adds this address to +recipients.yml+ and 
+# then restarts Postwhite.
 #
 # Initially all incoming emails will be rejected, so when Arthur decides to 
 # join the Betelgeuse mailing list, the whitelist has to learn about this. 
@@ -43,7 +43,7 @@
 # puts Postwhite into learning mode for a limited period of time. In learning
 # mode, Postwhite allows and delivers <em>any</em> incoming mails, yet it
 # delivers a followup notification message along with it. Thus when the first 
-# mail from the Betelgeuse mailing list comes in, Arthur simple replies to 
+# mail from the Betelgeuse mailing list comes in, Arthur simply replies to 
 # the corresponding notification mail thus adding Betelgeuse to the whitelist.
 #
 # As you see, Arthur sends commands to Postwhite by adding <em>+command</em>
@@ -82,9 +82,11 @@
 #
 # :title: Postwhite Policy Server
 
+require 'auto_gem'
 require 'trollop'
 require 'yaml'
 require 'erb'
+require 'etc'
 require 'gserver'
 require 'net/smtp'
 require 'fileutils'
@@ -101,7 +103,7 @@ class Postwhite
   ##
   # Postwhite version.
 
-  VERSION = 'postwhite 0.0.1, (c) 2008 Sven Schwyn, www.bitcetera.com'
+  VERSION = 'postwhite 0.1.0, (c) 2008 Sven Schwyn, www.bitcetera.com'
 
   ##
   # Available commands.
@@ -114,6 +116,7 @@ class Postwhite
   CONFIG = {
     :'host' => 'localhost',
     :'port' => 10035,
+    :'user' => 'postwhite',
     :'max-connections' => 4,
     :'learning-period' => 30,
     :'require-sasl' => true,
@@ -189,38 +192,45 @@ Please choose what you wish to do with future emails from this sender:
   # Find a running postwhite daemon or do some cleanup if none is found.
 
   def initialize
-    $config = CONFIG.merge(YAML.load_file("#{options[:'config-dir']}/config.yml").rekey) rescue CONFIG.clone
-    $config.merge!(parse_options)
+    options = parse_options
+    $config = CONFIG.merge(YAML.load_file("#{options[:prefix]}/#{options[:'config-dir']}/config.yml").rekey) rescue CONFIG.clone
+    $config.merge!(options)
+    [:'config-dir', :'pid-file', :'log-file', :'spool-dir'].each {|k| $config[k] = "#{$config[:prefix]}/#{$config[k]}" }
     $config[:messages] = MESSAGES.merge(YAML.load_file("#{$config[:'config-dir']}/messages.yml").rekey) rescue MESSAGES.clone
     $config[:recipients] = YAML.load_file("#{$config[:'config-dir']}/recipients.yml") rescue {}
-    $log = File.open($config[:'log-file'], 'a')
-    File.open($config[:'pid-file']) {|file| @pid = file.gets.to_i } rescue @pid = nil
-    Process.kill(0, @pid) rescue cleanup
   end
   
   ##
   # Cleanup resources.
 
   def self.finalize
-    $log.close
+    $log.close rescue true
   end
   
   ##
   # Dispatch to the selected command.
   
   def dispatch
-    COMMANDS.include?($config[:command].to_sym) ? self.send($config[:command]) : 1    
+    if $config[:command].nil? || !COMMANDS.include?($config[:command].to_sym)  
+      puts "Bad argument, see 'postwhite --help' for instructions." if !$config[:quiet]
+      1
+    else
+      if $config[:command] != 'configure'
+        $log = File.open($config[:'log-file'], 'a')
+        File.open($config[:'pid-file']) {|file| @pid = file.gets.to_i } rescue @pid = nil
+        Process.kill(0, @pid) rescue cleanup
+      end
+      self.send($config[:command])
+    end
   end
 
   ##
   # Creates all the necessary files in <tt>/etc</tt> and <tt>/var</tt>.
 
   def configure
-    FileUtils.mkdir_p($config[:'config-dir']) if !File.directory?($config[:'config-dir'])
-    FileUtils.mkdir_p($config[:'spool-dir']) if !File.directory?($config[:'spool-dir'])
-    File.open("#{$config[:'config-dir']}/config.yml", 'w') {|file| file.puts CONFIG.rekey(&:to_s).to_yaml } if !File.exists?("#{$config[:'config-dir']}/config.yml")
-    File.open("#{$config[:'config-dir']}/recipients.yml", 'w') {|file| file.puts RECIPIENTS.to_yaml } if !File.exists?("#{$config[:'config-dir']}/recipients.yml")
-    File.open("#{$config[:'config-dir']}/messages.yml", 'w') {|file| file.puts MESSAGES.rekey(&:to_s).to_yaml } if !File.exists?("#{$config[:'config-dir']}/messages.yml")
+    [:'log-file', :'pid-file'].each {|k| raise "cannot write #{config[k]}" if !File.directory?(File.dirname($config[k])) }
+    [:'config-dir', :'spool-dir'].each {|k| mkdir?($config[k]) }
+    %w(CONFIG RECIPIENTS MESSAGES).each {|k| mkyml?(k) }
     0
   end
 
@@ -230,6 +240,8 @@ Please choose what you wish to do with future emails from this sender:
   def start
     if !started?
       configure
+      Process.euid = Etc::getpwnam($config[:user]).uid
+      Process.gid = Etc::getpwnam($config[:user]).gid
       process = fork do
         server = PostwhiteServer.new
         server.start
@@ -302,6 +314,7 @@ Options:
       opt :'quiet', "Don't output anything", :default => false
       opt :'audit', "Write audit information to log", :default => false
       opt :'debug', "Write debug information to log", :default => false
+      opt :'prefix', "Use this prefix for all paths", :default => '/'
       stop_on Postwhite::COMMANDS
     end
     options[:command] = ARGV[0]
@@ -321,6 +334,25 @@ Options:
   def cleanup
     @pid = nil
     File.delete($config[:'pid-file']) rescue true
+  end
+
+  ##
+  # Create a directory if it doesn't exist already.
+
+  def mkdir?(dir)
+    FileUtils.mkdir_p(dir, :mode => 0770) if !File.directory?(dir)
+  end
+
+  ##
+  # Create a default configuration file if it doesn't exist already.
+
+  def mkyml?(yml)
+    if !File.exists?("#{$config[:'config-dir']}/#{yml.downcase}.yml")
+      File.open("#{$config[:'config-dir']}/#{yml.downcase}.yml", 'w') do |file|
+        file.puts eval(yml).rekey(&:to_s).to_yaml
+      end
+      File.chmod(0660, "#{$config[:'config-dir']}/#{yml.downcase}.yml")
+    end
   end
 
   ##
@@ -510,8 +542,10 @@ Reply-To: <%= replyto.nil? ? from : replyto %>
     # Is the sender of the incoming message (or the passed regexp) on the whitelist?
 
     def whitelisted?(regexp=/^(#{@data[:sender]}|#{@data[:domain]})$/)
-      FileUtils.touch("#{$config[:'config-dir']}/#{@data[:recipient]}")   # assure whitelist existance
-      !File.open("#{$config[:'config-dir']}/#{@data[:recipient]}") {|f| f.grep(regexp) }.empty?
+      whitelist = "#{$config[:'config-dir']}/#{@data[:recipient]}"
+      FileUtils.touch(whitelist)   # assure whitelist existance
+      FileUtils.chmod(0660, whitelist)   # assure whitelist permissions
+      !File.open(whitelist) {|f| f.grep(regexp) }.empty?
     end
 
     ##
