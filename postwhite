@@ -217,7 +217,6 @@ Please choose what you wish to do with future emails from this sender:
   
   def dispatch
     raise "must be run with root privileges" if Process.euid != 0
-    [:'log-file', :'pid-file'].each {|k| raise "directory #{File.dirname($config[k])} does not exist" if !File.directory?(File.dirname($config[k])) }
     raise "command argument not recognized" if $config[:command].nil? || !COMMANDS.include?($config[:command].to_sym)
     user = Etc.getpwnam($config[:user])
     $config[:uid] = user.uid
