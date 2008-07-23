@@ -409,7 +409,7 @@ Options:
             else   # not whitelisted
               sendmail($messages[:allow], $config[:sender], @request[:recipient], @request[:recipient].sub(/@/, "+allow-#{@request[:domain]}@"))
             end
-            respond(io, :DUNNO, :'learning mode')              
+            respond(io, :OK, :'learning mode')              
           else   # not learning
             if @request.whitelisted?
               respond(io, :DUNNO, :'found on whitelist')
