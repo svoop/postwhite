@@ -64,7 +64,7 @@
 # will help keeping this project alive. This applies in particular to email
 # service providers: Don't use it if you are too cheap to donate!
 #
-# http://www.bitcetera.com/en/products/postwhite
+# http://www.bitcetera.com/products/postwhite
 #
 # == Feedback and Contributions
 # Feel free to send your success/failure stories or questions using the 
@@ -148,7 +148,7 @@ class Postwhite
 This is an automated message from the Postwhite service.
 
 Check this web page for an introduction:
-http://www.bitcetera.com/en/products/postwhite
+http://www.bitcetera.com/products/postwhite
     EOS
     :info => <<-EOS,
 Subject: Info
@@ -308,6 +308,9 @@ private
       banner <<-EOS
 Postwhite is a policy server for Postfix MTA which filters incoming emails
 based on per recipient whitelists managed by an email frontend.
+
+Documentation:
+        http://www.bitcetera.com/products/postwhite
 
 Usage:
         postwhite [options] {#{Postwhite::COMMANDS.join('|')}}
