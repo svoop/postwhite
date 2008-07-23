@@ -22,10 +22,9 @@
 #    <tt>postwhite -d -q start</tt>
 # 6. Add the line <tt>check_policy_service inet:127.0.0.1:10035,</tt> to the
 #    <tt>smtpd_recipient_restrictions</tt> block which you find somewhere in
-#    <tt>/etc/postfix/main.cf</tt>. You should place it near the end of the
-#    block after all basic services (like <tt>reject_unauth_destination,</tt>)
-#    and the greylist service (like Postgrey) but before the anti-SPAM services
-#    (like DSPAM or SpamAssassin) in order to prevent unnecessary workload.
+#    <tt>/etc/postfix/main.cf</tt>. You should place it after basic reject
+#    rules (like <tt>reject_unauth_destination,</tt>) yet before the greylist
+#    (like Postgrey) and <tt>permit_mynetworks,</tt>.
 # 7. Finally, reload Postfix to bring your changes into effect:
 #    <tt>postfix reload</tt>
 #
