@@ -410,20 +410,20 @@ Options:
             else   # not whitelisted
               sendmail($messages[:allow], $config[:sender], @request[:recipient], @request[:recipient].sub(/@/, "+allow-#{@request[:domain]}@"))
             end
-            respond(io, :OK, :'learning mode')              
+            respond(io, :DUNNO, :'learning mode')              
           else   # not learning
             if @request.whitelisted?
-              respond(io, :OK, :'found on whitelist')
+              respond(io, :DUNNO, :'found on whitelist')
             else   # not whitelisted
               respond(io, :REJECT, $config[:'reject-message'])              
             end  
           end
         end
       else   # not protected
-        respond(io, :OK)
+        respond(io, :DUNNO)
       end
     rescue Exception => e
-      respond(io, :OK, :'daemon error')
+      respond(io, :DUNNO, :'daemon error')
       log(e.message + "\n" + e.backtrace.join("\n"))
     end
     
@@ -478,7 +478,7 @@ Reply-To: <%= replyto.nil? ? from : replyto %>
     ##
     # Sends a response through the IO channel.
 
-    def respond(io, action=:OK, message=nil)
+    def respond(io, action=:DUNNO, message=nil)
       io.print(:'action=', action)
       io.print(:' ', message) if !message.nil?
       2.times { io.puts }
