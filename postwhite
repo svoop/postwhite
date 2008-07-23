@@ -48,7 +48,7 @@
 # Arthur sends an empty email to <em>hitchhike+learn@dent.tld</em> which
 # puts Postwhite into learning mode for a limited period of time. In learning
 # mode, Postwhite allows and delivers <em>any</em> incoming mails, yet it
-# delivers a followup notification message along with it. Thus when the first 
+# delivers a followup notification message along with it. When the first 
 # email from the Betelgeuse mailing list comes in, Arthur simply replies to 
 # the corresponding notification message thus adding Betelgeuse to the 
 # whitelist.
