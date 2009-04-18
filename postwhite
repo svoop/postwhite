@@ -28,14 +28,14 @@
 # 7. Finally, reload Postfix to bring your changes into effect:
 #    <tt>postfix reload</tt>
 #
-# Postwhite has not been thoroughly with Ruby 1.9.1 yet.
+# Postwhite has not been thoroughly tested with Ruby 1.9.1 yet.
 #
 # == Usage
 # Incoming emails are denied unless the sender address or sender domain is 
 # present on the recipient's whitelist. This concept is neither new nor fancy
 # in itself, but the way Postwhite lets you manage your whitelist sure is.
 # 
-# === Real Live Example
+# === Real Life Example
 # Arthur's main email address <em>arthur@dent.tld</em> is great for everyday
 # use, but he doesn't want to pollute it by using it for mailing list digests,
 # websites, online shopping and such. Postwhite to the rescue! Arthur creates 
@@ -64,11 +64,11 @@
 # should therefore subscribe to the daily digest instead as the digest is
 # always sent from the same generic address.
 #
-# If you use mailinglist web frontends such as Gmane (www.gmane.org), you
-# might want to subscribe to a mailinglist yet ignore all incoming posts
-# as you'll read them on the web frontend instead. In this case tell
-# Postfix not to whitelist the sender with +allow+ (allow and deliver)
-# but with +swallow+ (allow and don't deliver). 
+# If you use mailinglist web frontends such as Gmane (www.gmane.org) or
+# Nabble (www.nabble.com), you might want to subscribe to a mailinglist yet 
+# ignore all incoming posts as you'll read them on the web frontend instead.
+# In this case tell Postfix not to whitelist the sender with +allow+ (allow 
+# and deliver) but with +swallow+ (allow and don't deliver). 
 #
 # === Security
 # Never set the +require-sasl+ config item to +false+ in production
@@ -106,7 +106,7 @@
 # http://forge.bitcetera.com
 #
 # == Changelog
-# * 0.1.3 (2009-04-17): support for whitelist methods like SWALLOW
+# * 0.1.3 (2009-04-18): support for whitelist methods like SWALLOW
 # * 0.1.2 (2009-03-28): configure and restart commands for updating
 # * 0.1.1 (2009-01-18): some refactoring
 # * 0.1.0 (2008-07-23): initial release
