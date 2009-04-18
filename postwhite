@@ -272,9 +272,9 @@ Please choose what you wish to do with future emails from this sender:
   ##
   # Creates all the necessary files in <tt>/etc</tt> and <tt>/var</tt>.
 
-  def configure
+  def configure(allow_suffix=true)
     [:'config-dir', :'spool-dir'].each {|dir| mkdir($config[dir]) }
-    %w(CONFIG RECIPIENTS MESSAGES).each {|file| mkyml(file) }
+    %w(CONFIG RECIPIENTS MESSAGES).each {|file| mkyml(file, allow_suffix) }
     0
   end
 
@@ -283,7 +283,7 @@ Please choose what you wish to do with future emails from this sender:
 
   def start
     if !started?
-      configure
+      configure(false)
       FileUtils.touch($config[:'log-file'])
       FileUtils.chmod(0640, $config[:'log-file'])
       $log = File.open($config[:'log-file'], 'a')
@@ -404,16 +404,18 @@ Options:
   end
 
   ##
-  # Create a default configuration file (with suffix '.new' if it exist already).
+  # Create a default configuration file (if necessary and allowed with suffix '.new').
 
-  def mkyml(yml)
+  def mkyml(yml, allow_suffix=true)
     file = "#{$config[:'config-dir']}/#{yml.downcase}.yml"
-    file += '.new' if File.exists?(file)
-    File.open(file, 'w') do |f|
-      f.puts eval(yml).rekey(&:to_s).to_yaml
+    file += '.new' if File.exists?(file) && allow_suffix
+    if !File.exists?(file)
+      File.open(file, 'w') do |f|
+        f.puts eval(yml).rekey(&:to_s).to_yaml
+      end
+      File.chmod(0640, file)
+      File.chown($config[:uid], $config[:gid], file)
     end
-    File.chmod(0640, file)
-    File.chown($config[:uid], $config[:gid], file)
   end
 
   ##
