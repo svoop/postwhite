@@ -127,7 +127,7 @@ require 'etc'
 require 'gserver'
 require 'net/smtp'
 require 'fileutils'
-require 'facets/file/read'
+require 'facets/file/read_list'
 require 'facets/file/write'
 require 'facets/file/rewrite'
 require 'facets/hash/rekey'
@@ -606,7 +606,7 @@ Reply-To: <%= replyto.nil? ? from : replyto %>
     def remove_from_whitelist
       if query_whitelist(/^#{Regexp.escape(@data[:argument])}/) != :DENY
         File.rewrite("#{$config[:'config-dir']}/#{@data[:recipient]}") do |s|
-          s.gsub!(/^#{Regexp.escape(@data[:argument])}.*$/, '')
+          s.gsub(/^#{Regexp.escape(@data[:argument])}.*$/, '')
         end
       end
     end
